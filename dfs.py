@@ -5,6 +5,7 @@ import copy
 from ee import EventEmitter
 from PIL import ImageGrab
 from PIL import Image, ImageDraw
+import os
 
 WIDTH = 1000
 HEIGHT = 800
@@ -148,7 +149,7 @@ class Maze(EventEmitter):
             data = json.loads(f.read())
             return cls.load_data(data)
 
-    def dfs(self, stop_at_finish=False, stop_if_revisiting=False):
+    def dfs(self, stop_at_finish=False, stop_if_revisiting=False, revisit_allowed=False):
 
 
         # Find finish from start using dfs
@@ -173,7 +174,11 @@ class Maze(EventEmitter):
                     if stop_at_finish and neighbour in finishes:
                         self.emit('dfs', 'goal', neighbour)
                         return
+
                     if self[neighbour]:
+                        if not revisit_allowed:
+                            continue
+
                         self.emit('dfs', 'second_visit', neighbour)
                         if stop_if_revisiting:
                             return
@@ -525,7 +530,8 @@ class MazeApp(object):
     # def _resize(self, ev):
     #     self.run_dfs_goal_1()
 
-        self.run_dfs_dag_1()
+        #self.run_dfs_dag_1()
+        self.run_dfs_goal_1()
 
     def setup_menus(self):
         menubar = tk.Menu(self._master)
@@ -561,12 +567,15 @@ class MazeApp(object):
 
             i = 0
             filename = "dfs_goal_undirected1_{}.png"
+            filename = "images/dfs_goal_undirected1/dfs_goal_undirected1_{}.png"
+
+            os.makedirs(os.path.dirname(filename), exist_ok=True)
 
             def cap():
                 self._view.update()
                 ImageGrab.grab((int(x), int(y) + 20, int(x) + int(width), int(y) + 20 + int(height))).save(filename.format(i))
 
-            for _ in self._maze.dfs(stop_at_finish=True):
+            for _ in self._maze.dfs(stop_at_finish=True, revisit_allowed=False):
                 cap()
 
                 i += 1
@@ -604,6 +613,9 @@ class MazeApp(object):
 
             i = 0
             filename = "dfs_goal_directed1_{}.png"
+            filename = "images/dfs_goal_directed1/dfs_goal_directed1_{}.png"
+
+            os.makedirs(os.path.dirname(filename), exist_ok=True)
 
             def cap():
                 self._view.update()
@@ -646,13 +658,15 @@ class MazeApp(object):
             width, height = dim.split('x')
 
             i = 0
-            filename = "dfs_dag1_{}.png"
+            filename = "images/dfs_dag1/dfs_dag1_{}.png"
+
+            os.makedirs(os.path.dirname(filename), exist_ok=True)
 
             def cap():
                 self._view.update()
                 ImageGrab.grab((int(x), int(y) + 20, int(x) + int(width), int(y) + 20 + int(height))).save(filename.format(i))
 
-            for _ in self._maze.dfs(stop_at_finish=True, stop_if_revisiting=True):
+            for _ in self._maze.dfs(stop_at_finish=True, stop_if_revisiting=True, revisit_allowed=True):
                 cap()
 
                 i += 1

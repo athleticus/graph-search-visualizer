@@ -3,7 +3,7 @@
   "columns": 5,
   "start": [1, 4],
   "finishes": [
-    [2, 3]
+    [3,0]
   ],
   "directed": false,
   "walls": [

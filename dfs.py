@@ -19,17 +19,20 @@ Y_OFFSET = 2
 PATH_WIDTH = 120
 PATH_HEIGHT = 120
 
-CURRENT_CELL_FILL = 'gold'
-NONCURRENT_CELL_FILL = 'alice blue'
+CURRENT_NODE_FILL = 'gold'
+NONCURRENT_NODE_FILL = 'alice blue'
 FINISHED_CELL_FILL = 'firebrick'
 
-VISITED_CELL_FILL = 'indian red'
-START_CELL_FILL = '#F2D3D5'
 FINISH_CELL_FILL = 'gold'
+FINISH_CELL_FILL = '#F2EFD3'
 CELL_LABEL_COLOUR = '#808080'
 UNVISITED_FILL = '#ffffff'
 NEIGHBOUR_CELL_FILL = 'green yellow'
-STACK_CELL_FILL = 'DarkSeaGreen1'
+
+START_CELL_FILL = '#D3E8F2'
+STACK_CELL_FILL = '#F2D3D5'
+VISITED_CELL_FILL = 'indian red'
+REVISITED_CELL_FILL = 'indian red'
 
 NORTH = 'n'
 EAST = 'e'
@@ -44,6 +47,11 @@ DIRECTION_DELTAS = {
     EAST: (0, 1),
     WEST: (0, -1)
 }
+
+DFS_WHITE = None
+DFS_GRAY = False
+DFS_BLACK = True
+
 
 class Maze(EventEmitter):
     def __init__(self, rows, columns, walls=None, directed=False):
@@ -133,7 +141,6 @@ class Maze(EventEmitter):
     def clone(self):
         return copy.deepcopy(self)
 
-
     @classmethod
     def load_data(cls, data):
         m = cls(data['rows'], data['columns'], data.get('walls'),
@@ -149,9 +156,62 @@ class Maze(EventEmitter):
             data = json.loads(f.read())
             return cls.load_data(data)
 
-    def dfs(self, stop_at_finish=False, stop_if_revisiting=False, revisit_allowed=False):
+    def dfs(self, stop_at_finish=False, stop_if_revisiting=False,
+            revisit_allowed=False):
+        # Find finish from start using dfs
+        self.emit('dfs', 'start')
+        yield
+        start, finishes = self.get_positions()
+        finish = next(iter(finishes))
 
+        S = []
+        S.append(start)
+        self[start] = DFS_GRAY
+        self.emit('dfs', 'push_start', start)
+        yield
 
+        while len(S):
+            v = S[-1]
+            self.emit('dfs', 'current', v)
+            yield
+
+            u = None
+            for neighbour in self.get_neighbours(v):
+
+                if self[neighbour] != DFS_WHITE:
+                    self.emit('dfs', 'revisit', neighbour)
+                    # yield
+                    if self[neighbour] == DFS_GRAY:
+                        if stop_if_revisiting:
+                            self.emit('dfs', 'cycle', neighbour)
+                            return
+
+                    continue
+
+                self.emit('dfs', 'neighbour', neighbour)
+                # yield
+                u = neighbour
+                break
+
+            if u:
+                self.emit('dfs', 'push', u)
+                yield
+                S.append(u)
+                self[u] = DFS_GRAY
+
+                if stop_at_finish and u in finishes:
+                    self.emit('dfs', 'goal', u)
+                    return
+            else:
+                self.emit('dfs', 'pop', v)
+                yield
+                S.pop(-1)
+                self[v] = DFS_BLACK
+
+        self.emit('dfs', 'failed')
+
+    def dfs_old(self, stop_at_finish=False, stop_if_revisiting=False,
+                revisit_allowed=False):
         # Find finish from start using dfs
         self.emit('dfs', 'start')
         start, finishes = self.get_positions()
@@ -192,11 +252,13 @@ class Maze(EventEmitter):
 
         self.emit('dfs', 'failed')
 
+
 DFS_MEMORY = """
 Stack: {stack}
 Visited: {visited}
-Current: {current}\tNeighbours: {neighbours}
+Current: {current}
 """.strip()
+
 
 class MazeMemory(object):
     def __init__(self, canvas, maze, bounds, font=None, *args, **kwargs):
@@ -217,25 +279,36 @@ class MazeMemory(object):
 
         self.setup_listeners()
 
-    def _handle_dfs(self, type, pos=None):
+    def _handle_dfs(self, type, pos=None, pos2=None):
         if type == 'start':
             pass
         elif type == 'push_start':
             self._stack.append(pos)
-        elif type == 'pop':
-            self._stack.remove(pos)
+        elif type == 'current':
             self._current = pos
-        elif type == 'second_visit':
-            pass
-        elif type == 'first_visit':
-            self._visited.append(pos)
-        elif type == 'push_finish':
-            self._neighbours = []
-        elif type == 'push':
-            self._neighbours.append(pos)
-            self._stack.append(pos)
         elif type == 'goal':
             self._neighbours.append(pos)
+        elif type == 'neighbour':
+            pass
+        elif type == 'revisit':
+            pass
+        elif type == 'push':
+            self._stack.append(pos)
+        elif type == 'pop':
+            self._stack.pop(-1)
+            self._visited.append(pos)
+        elif type == 'failed':
+            pass
+
+        # 'start'
+        # 'push_start', start
+        # 'current', v
+        # 'goal',neighbour
+        # 'neighbour', neighbour
+        # 'revisit', neighbour
+        # 'push', v, u
+        # 'pop', v
+        # 'failed'
 
         self.draw()
 
@@ -244,26 +317,42 @@ class MazeMemory(object):
 
     def draw(self):
         if not self._item:
-            self._item = self._canvas.create_text(self._top_left, anchor=tk.NW, font=self._font)
+            self._item = self._canvas.create_text(self._top_left, anchor=tk.NW,
+                                                  font=self._font)
 
         text = DFS_MEMORY.format(**{
             'current': self._current,
-            'stack': ", ".join([str(v) for v in self._stack]) if self._stack else '',
-            'neighbours': ", ".join([str(v) for v in self._neighbours]) if self._neighbours else '',
-            'visited': ", ".join([str(v) for v in self._visited]) if self._visited else ''
+            'stack': ", ".join(
+                [str(v) for v in self._stack]) if self._stack else '',
+            'neighbours': ", ".join(
+                [str(v) for v in self._neighbours]) if self._neighbours else '',
+            'visited': ", ".join(
+                [str(v) for v in self._visited]) if self._visited else ''
         })
 
         self._canvas.itemconfigure(self._item, text=text)
 
 
-
-
 class Data:
-    pass
+    def __init__(self):
+        self._history = []
+
+    def add(self, type, data):
+        self._history.append((type, data))
+
+    def find_last(self, type=None):
+        if type is None:
+            return self._history[-1]
+
+        for this_type, this_data in reversed(self._history):
+            if this_type == type:
+                return this_type, this_data
+
 
 class MazeView(tk.Canvas):
     def __init__(self, master, maze, width=WIDTH, height=HEIGHT,
-                 cell_width=CELL_WIDTH, cell_height=CELL_HEIGHT, stats_height=110):
+                 cell_width=CELL_WIDTH, cell_height=CELL_HEIGHT,
+                 stats_height=110):
         self._master = master
         super().__init__(master, width=width, height=(height + stats_height))
 
@@ -278,8 +367,10 @@ class MazeView(tk.Canvas):
         self._visited_bg = maze.clone()
         self._node_bg = maze.clone()
 
-        self._memory = MazeMemory(self, self._maze, ((0 + 8, height + 8), (width, height + stats_height)), font=('Helvetica', '28'))
-        
+        self._memory = MazeMemory(self, self._maze, (
+        (0 + 8, height + 8), (width, height + stats_height)),
+                                  font=('Helvetica', '28'))
+
         self.setup_listeners()
 
         self._im = Image.new("RGB", (width, height + stats_height))
@@ -290,73 +381,56 @@ class MazeView(tk.Canvas):
     def setup_listeners(self):
         self._maze.on('dfs', self._handle_dfs)
 
-    def _handle_dfs(self, type, pos=None):
+    def _handle_dfs(self, type, pos=None, pos2=None):
+        print(type, pos, pos2)
+
         if type == 'start':
             data = self._data = Data()
-            data.prev_type = None
-            data.prev_pos = None
             data.prev_neighbours = []
         elif type == 'push_start':
             print("Starting at {}".format(pos))
-            fill = START_CELL_FILL
-            self.itemconfigure(self._visited_bg[pos], fill=fill)
-            self.itemconfigure(self._node_bg[pos], fill=NONCURRENT_CELL_FILL)
-        elif type == 'pop':
+            self.itemconfigure(self._visited_bg[pos], fill=STACK_CELL_FILL)
+        elif type == 'current':
             print('Popped {}'.format(pos))
-            fill = CURRENT_CELL_FILL  # if pos != self._maze.get_positions()[0] else START_CELL_FILL
-            self.itemconfigure(self._node_bg[pos], fill=fill)
-        elif type == 'second_visit':
-            print("Already visited {}".format(pos))
-            self.itemconfigure(self._node_bg[self._data.prev_pos],
-                               fill=NONCURRENT_CELL_FILL)
-            self.itemconfigure(self._visited_bg[pos],
-                               fill=NEIGHBOUR_CELL_FILL)
-        elif type == 'first_visit':
-            print("Unvisited {}".format(pos))
-            self.itemconfigure(self._visited_bg[pos], fill=VISITED_CELL_FILL)
-        elif type == 'push_finish':
-            for neighbour_pos in self._data.prev_neighbours:
-                fill = VISITED_CELL_FILL if self._maze[
-                    neighbour_pos] else STACK_CELL_FILL
-                self.itemconfigure(self._visited_bg[neighbour_pos],
-                                   fill=fill)
-            self._data.prev_neighbours = []
-        elif type == 'push':
-            self._data.prev_neighbours.append(pos)
-            print(pos, self._maze.get_positions()[1])
-            print("Pushing {}".format(pos))
-            self.itemconfigure(self._visited_bg[pos], fill=NEIGHBOUR_CELL_FILL)
+            fill = CURRENT_NODE_FILL  # if pos != self._maze.get_positions()[0] else START_CELL_FILL
+            self.itemconfigure(self._node_bg[pos], fill=CURRENT_NODE_FILL)
+            last = self._data.find_last('current')
+            if last:
+                last_type, last_pos = last
+                self.itemconfigure(self._node_bg[last_pos],
+                                   fill=NONCURRENT_NODE_FILL)
+
         elif type == 'goal':
-            print("Finished!")
+            self.itemconfigure(self._node_bg[pos],
+                               fill=CURRENT_NODE_FILL)
             self.itemconfigure(self._visited_bg[pos],
-                               fill=VISITED_CELL_FILL)
-            for other_pos in self._node_bg:
-                self.itemconfigure(self._node_bg[other_pos],
-                               fill=NONCURRENT_CELL_FILL)
-            self.itemconfigure(self._node_bg[pos], fill=CURRENT_CELL_FILL)
+                               fill=STACK_CELL_FILL)
 
-            for neighbour_pos in self._data.prev_neighbours:
-                if neighbour_pos == pos:
-                    continue
-                fill = VISITED_CELL_FILL if self._maze[
-                    neighbour_pos] else STACK_CELL_FILL
-                self.itemconfigure(self._visited_bg[neighbour_pos],
-                                   fill=fill)
-            self._data.prev_neighbours = []
+            last = self._data.find_last('current')
+            if last:
+                last_type, last_pos = last
+                self.itemconfigure(self._node_bg[last_pos],
+                                   fill=NONCURRENT_NODE_FILL)
+        elif type == 'neighbour':
+            pass
+        elif type == 'revisit':
+            pass
+        elif type == 'cycle':
+            print("Found cycle {}".format(pos))
+            self.itemconfigure(self._node_bg[pos], fill=REVISITED_CELL_FILL)
+        elif type == 'push':
+            print("Pushing {}".format(pos))
+            self.itemconfigure(self._visited_bg[pos], fill=STACK_CELL_FILL)
+        elif type == 'pop':
+            self.itemconfigure(self._visited_bg[pos], fill=VISITED_CELL_FILL)
+        elif type == 'failed':
+            pass
 
-        if self._data.prev_type is not None:
-            prev_pos = self._data.prev_pos
-            prev_type = self._data.prev_type
-            # handle changes
-            if prev_type == 'push_finish':
-                self.itemconfigure(self._node_bg[prev_pos],
-                                   fill=NONCURRENT_CELL_FILL)
+        self._data.add(type, pos)
 
-        self._data.prev_pos = pos
-        self._data.prev_type = type
+    def draw_grid(self, graph_view=True):
+        self.delete(tk.ALL)
 
-
-    def draw_grid(self):
         # Draw background
         for row in range(self._maze.get_rows()):
             for column in range(self._maze.get_columns()):
@@ -382,9 +456,13 @@ class MazeView(tk.Canvas):
                     from_pos = row, column
                     to_pos = (row + dr, column + dc)
 
-                    if not self._maze.can_move(from_pos, to_pos) and not self._maze.can_move(
+                    if not self._maze.can_move(from_pos,
+                                               to_pos) and not self._maze.can_move(
                             to_pos, from_pos):
                         self.draw_wall(from_pos, to_pos)
+
+        if not graph_view:
+            return
 
         # Draw cells
         for row in range(self._maze.get_rows()):
@@ -421,16 +499,20 @@ class MazeView(tk.Canvas):
         x1, y1 = self.get_cell_pos(pos, centre=False)
         x2, y2 = self.get_cell_pos((pos[0] + 1, pos[1] + 1), centre=False)
 
-        self._visited_bg[pos] = self.create_rectangle(x1, y1, x2, y2, fill=special_fill, outline='')
+        self._visited_bg[pos] = self.create_rectangle(x1, y1, x2, y2,
+                                                      fill=special_fill,
+                                                      outline='')
 
-        res = self._draw.rectangle((x1, y1, x2, y2), fill=special_fill, outline=None)
-
+        res = self._draw.rectangle((x1, y1, x2, y2), fill=special_fill,
+                                   outline=None)
 
     def get_cell_pos(self, rc_pos, centre=True):
         row, col = rc_pos
         offset = 0.5 if centre else 0
-        x = (col + offset) * (self._cell_width + self._cell_padding_x) + X_OFFSET
-        y = (row + offset) * (self._cell_height + self._cell_padding_y) + Y_OFFSET
+        x = (col + offset) * (
+        self._cell_width + self._cell_padding_x) + X_OFFSET
+        y = (row + offset) * (
+        self._cell_height + self._cell_padding_y) + Y_OFFSET
 
         return x, y
 
@@ -446,11 +528,13 @@ class MazeView(tk.Canvas):
         else:
             text = ''
 
-        fill = VISITED_CELL_FILL if self._maze[pos] else NONCURRENT_CELL_FILL
+        fill = VISITED_CELL_FILL if self._maze[pos] else NONCURRENT_NODE_FILL
 
-        self._node_bg[pos] = self.create_oval(x - self._cell_width // 2, y - self._cell_height // 2,
-                         x + self._cell_width // 2,
-                         y + self._cell_height // 2, fill=fill)
+        self._node_bg[pos] = self.create_oval(x - self._cell_width // 2,
+                                              y - self._cell_height // 2,
+                                              x + self._cell_width // 2,
+                                              y + self._cell_height // 2,
+                                              fill=fill)
 
         if text:
             self.create_text(x, y, text=text, font=("Helvetica", 28))
@@ -458,7 +542,8 @@ class MazeView(tk.Canvas):
         # Draw label
         x_end, y_end = self.get_cell_pos((pos[0] + 1, pos[1] + 1), centre=False)
         text_x, text_y = (x + x_end) // 2, (y + y_end) // 2
-        self.create_text(text_x, text_y, text=str(pos), font=("Helvetica", 28), fill=CELL_LABEL_COLOUR)
+        self.create_text(text_x, text_y, text=str(pos), font=("Helvetica", 28),
+                         fill=CELL_LABEL_COLOUR)
 
     def draw_paths(self, from_pos, to_pos):
         can_from_to = self._maze.can_move(from_pos, to_pos)
@@ -486,10 +571,9 @@ class MazeView(tk.Canvas):
             y1 = y_mid - PATH_HEIGHT // 2
             y2 = y_mid + PATH_HEIGHT // 2
 
-
         if arrow is not None:
             # no arrow heads for undirected
-            #arrow if self._maze.is_directed() else None
+            # arrow if self._maze.is_directed() else None
             self.create_line(x1, y1, x2, y2, arrow=arrow)
 
     def draw_wall(self, from_pos, to_pos):
@@ -512,10 +596,12 @@ class MazeView(tk.Canvas):
 
 
 class MazeApp(object):
+    ANIMATION_DELAY = 1500
+
     def __init__(self, master):
         self._master = master
 
-        m = Maze.load_file('directed1.json')
+        m = Maze.load_file('dag1.json')
         self._maze = m
 
         print(m.get_walls())
@@ -525,22 +611,25 @@ class MazeApp(object):
 
         self.setup_menus()
 
-    #     self._view.bind("<Configure>", self._resize)
-    #
-    # def _resize(self, ev):
-    #     self.run_dfs_goal_1()
-
-        #self.run_dfs_dag_1()
-        self.run_dfs_goal_1()
+        #     self._view.bind("<Configure>", self._resize)
+        #
+        # def _resize(self, ev):
+        #     self.run_dfs_goal_1()
 
     def setup_menus(self):
         menubar = tk.Menu(self._master)
 
         # create a pulldown menu, and add it to the menu bar
         demo_menu = tk.Menu(menubar, tearoff=0)
-        demo_menu.add_command(label="DFS -> Goal (Undirected)", command=self.run_dfs_goal_1)
-        demo_menu.add_command(label="DFS -> Goal (Directed)", command=self.run_dfs_goal_2)
-        demo_menu.add_command(label="DFS -> Detect DAG", command=self.run_dfs_dag_1)
+        demo_menu.add_command(label="DFS -> Goal (Undirected)",
+                              command=self.run_dfs_goal_1)
+        demo_menu.add_command(label="DFS -> Goal (Directed A -> B)",
+                              command=self.run_dfs_goal_2a)
+        demo_menu.add_command(label="DFS -> Goal (Directed B -> A)",
+                              command=self.run_dfs_goal_2b)
+        demo_menu.add_command(label="DFS -> Detect DAG",
+                              command=self.run_dfs_dag_1)
+        demo_menu.add_command(label="Intro", command=self.run_intro)
         demo_menu.add_separator()
         demo_menu.add_command(label="Exit", command=self._master.quit)
         menubar.add_cascade(label="Demos", menu=demo_menu)
@@ -558,47 +647,40 @@ class MazeApp(object):
         self._view = MazeView(master, m)
         self._view.pack(side=tk.TOP)
 
-        capture = True
+        moves = self._maze.dfs(stop_at_finish=True, stop_if_revisiting=False,
+                               revisit_allowed=True)
 
-        if capture:
+        filename = "images/find-goal-undirected/find-goal-undirected_{}.png"
 
-            dim, x, y = master.geometry().split('+')
-            width, height = dim.split('x')
+        moves = self._maze.dfs(stop_at_finish=True, stop_if_revisiting=False,
+                               revisit_allowed=True)
 
-            i = 0
-            filename = "dfs_goal_undirected1_{}.png"
-            filename = "images/dfs_goal_undirected1/dfs_goal_undirected1_{}.png"
+        self._animate_moves(moves, filename=filename)
 
-            os.makedirs(os.path.dirname(filename), exist_ok=True)
-
-            def cap():
-                self._view.update()
-                ImageGrab.grab((int(x), int(y) + 20, int(x) + int(width), int(y) + 20 + int(height))).save(filename.format(i))
-
-            for _ in self._maze.dfs(stop_at_finish=True, revisit_allowed=False):
-                cap()
-
-                i += 1
-
-            self._master.after(250, cap)
-
-            return
-
-        iter = self._maze.dfs(stop_at_finish=True)
-
-        def _run_dfs():
-            next(iter)
-
-            self._master.after(50, _run_dfs)
-
-        self._master.after(0, _run_dfs)
-
-    def run_dfs_goal_2(self):
+    def run_dfs_goal_2a(self):
         master = self._master
 
         self._view.pack_forget()
 
-        m = Maze.load_file('directed1.json')
+        m = Maze.load_file('directed1a.json')
+        self._maze = m
+
+        self._view = MazeView(master, m)
+        self._view.pack(side=tk.TOP)
+
+        filename = "images/find-goal-directed-a-b/find-goal-directed-a-b_{}.png"
+
+        moves = self._maze.dfs(stop_at_finish=True, stop_if_revisiting=False,
+                               revisit_allowed=True)
+
+        self._animate_moves(moves, filename=filename)
+
+    def run_dfs_goal_2b(self):
+        master = self._master
+
+        self._view.pack_forget()
+
+        m = Maze.load_file('directed1b.json')
         self._maze = m
 
         self._view = MazeView(master, m)
@@ -607,37 +689,15 @@ class MazeApp(object):
         capture = True
 
         if capture:
-
             dim, x, y = master.geometry().split('+')
             width, height = dim.split('x')
 
-            i = 0
-            filename = "dfs_goal_directed1_{}.png"
-            filename = "images/dfs_goal_directed1/dfs_goal_directed1_{}.png"
+        filename = "images/find-goal-directed-b-a/find-goal-directed-b-a_{}.png"
 
-            os.makedirs(os.path.dirname(filename), exist_ok=True)
+        moves = self._maze.dfs(stop_at_finish=True, stop_if_revisiting=False,
+                               revisit_allowed=True)
 
-            def cap():
-                self._view.update()
-                ImageGrab.grab((int(x), int(y) + 20, int(x) + int(width), int(y) + 20 + int(height))).save(filename.format(i))
-
-            for _ in self._maze.dfs(stop_at_finish=True):
-                cap()
-
-                i += 1
-
-            self._master.after(250, cap)
-
-            return
-
-        iter = self._maze.dfs(stop_at_finish=True)
-
-        def _run_dfs():
-            next(iter)
-
-            self._master.after(50, _run_dfs)
-
-        self._master.after(0, _run_dfs)
+        self._animate_moves(moves, filename=filename)
 
     def run_dfs_dag_1(self):
         master = self._master
@@ -650,37 +710,67 @@ class MazeApp(object):
         self._view = MazeView(master, m)
         self._view.pack(side=tk.TOP)
 
-        capture = True
+        filename = "images/detect-cycle/detect-cycle_{}.png"
 
-        if capture:
+        moves = self._maze.dfs(stop_at_finish=True, stop_if_revisiting=True,
+                               revisit_allowed=True)
+        self._animate_moves(moves, filename)
 
-            dim, x, y = master.geometry().split('+')
-            width, height = dim.split('x')
+    def run_intro(self):
+        master = self._master
 
+        self._view.pack_forget()
+
+        m = Maze.load_file('undirected1.json')
+        self._maze = m
+
+        self._view = MazeView(master, m)
+        self._view.pack(side=tk.TOP)
+
+        filename = "images/intro/intro_{}.png"
+
+        def _intro():
+            yield self._view.draw_grid(graph_view=False)
+            yield self._view.draw_grid(graph_view=True)
+
+        moves = _intro()
+
+        self._animate_moves(moves, filename=filename)
+
+    def _animate_moves(self, moves, filename=None):
+
+        class Counter:
             i = 0
-            filename = "images/dfs_dag1/dfs_dag1_{}.png"
+
+        if filename:
+            dim, x, y = self._master.geometry().split('+')
+            width, height = dim.split('x')
 
             os.makedirs(os.path.dirname(filename), exist_ok=True)
 
             def cap():
                 self._view.update()
-                ImageGrab.grab((int(x), int(y) + 20, int(x) + int(width), int(y) + 20 + int(height))).save(filename.format(i))
-
-            for _ in self._maze.dfs(stop_at_finish=True, stop_if_revisiting=True, revisit_allowed=True):
-                cap()
-
-                i += 1
-
-            self._master.after(250, cap)
-
-        return
+                ImageGrab.grab((int(x), int(y) + 20, int(x) + int(width),
+                                int(y) + 20 + int(height) - 120)).save(
+                    filename.format(Counter.i))
 
         def _run_dfs():
-            next(iter)
+            try:
+                next(moves)
+            except StopIteration:
+                if filename:
+                    cap()
 
-            self._master.after(50, _run_dfs)
+                return
 
-        self._master.after(0, _run_dfs)
+            Counter.i += 1
+
+            if filename:
+                cap()
+
+            self._master.after(self.ANIMATION_DELAY, _run_dfs)
+
+        self._master.after(self.ANIMATION_DELAY, _run_dfs)
 
 
 def main():
